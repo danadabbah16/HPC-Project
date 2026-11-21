@@ -1,0 +1,2 @@
+run,date,device,nodes,workers,threads,batch_size,lr,epochs,seed,data_load_s,train_time_s,time_per_epoch_s,throughput_samples_s,val_accuracy,val_macro_f1,test_accuracy,test_macro_f1,test_f1_W,test_f1_N1,test_f1_N2,test_f1_N3,test_f1_REM
+baseline_1cpu,2026-11-21T19:09:44,cpu,1,1,1,64,0.001,10,42,14.6,495.44,49.54,2690.9,0.7596,0.7113,0.719,0.6841,0.9054,0.4202,0.7177,0.7257,0.6513
