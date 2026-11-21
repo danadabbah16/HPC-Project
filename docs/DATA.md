@@ -52,16 +52,26 @@ Sleep-EDF Expanded v1.0.0 from PhysioNet (`physionet.org/files/sleep-edfx/1.0.0/
 | REM | 25,835 | 13.2% |
 | **Total** | **195,469** | |
 
-| Split | Subjects | Recordings | Epochs |
+| Split | Subjects | Recordings | Epochs | Share of data |
+|---|---|---|---|---|
+| Train | 54 | 105 | 133,319 | 68.2% |
+| Val | 12 | 24 | 34,286 | 17.5% |
+| Test | 12 | 24 | 27,864 | 14.3% |
+
+Class counts per split, with each class's share of that split:
+
+| Stage | Train | Val | Test |
 |---|---|---|---|
-| Train | 54 | 105 | 133,319 |
-| Val | 12 | 24 | see `meta.json` |
-| Test | 12 | 24 | see `meta.json` |
+| Wake | 44,721 (33.5%) | 12,911 (37.7%) | 8,309 (29.8%) |
+| N1 | 15,241 (11.4%) | 3,219 (9.4%) | 3,062 (11.0%) |
+| N2 | 48,305 (36.2%) | 10,858 (31.7%) | 9,969 (35.8%) |
+| N3 | 7,716 (5.8%) | 2,575 (7.5%) | 2,748 (9.9%) |
+| REM | 17,336 (13.0%) | 4,723 (13.8%) | 3,776 (13.6%) |
+| **Total** | **133,319** | **34,286** | **27,864** |
 
-Val and test together hold 62,150 epochs.
+The split is by subject, not stratified by class, so the class shares differ a little between splits. With the fixed seed (42), everyone gets exactly these numbers.
 
-Train-set class counts (W, N1, N2, N3, REM): 44,721 / 15,241 / 48,305 / 7,716 / 17,336.
-Inverse-frequency class weights from `class_weights()`: 0.38 / 1.11 / 0.35 / 2.19 / 0.97.
+Inverse-frequency class weights from `class_weights()` on the training set (W, N1, N2, N3, REM): 0.38 / 1.11 / 0.35 / 2.19 / 0.97.
 
 The classes are imbalanced: N3 is the rarest (6.7%) and N1 the second rarest (11.0%), so macro F1 and per-class results matter more than plain accuracy.
 
