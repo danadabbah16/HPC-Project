@@ -5,6 +5,9 @@ Quick test on the laptop:
 
 Baseline on the cluster (1 CPU core):
     srun -c 1 python -m src.train --data data/processed --run-name baseline_1cpu
+
+CUDA mixed-precision smoke test:
+    python -m src.train --data data/sample --epochs 2 --device cuda --amp
 """
 import argparse
 import csv
@@ -34,6 +37,7 @@ def parse_args():
                    help="CPU threads for PyTorch (defaults to the cores Slurm gave you)")
     p.add_argument("--loader-workers", type=int, default=0, help="DataLoader worker processes")
     p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
+    p.add_argument("--amp", action="store_true", help="use CUDA FP16 mixed precision")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--run-name", default="test")
     p.add_argument("--results", default="results/results.csv", help="CSV that every run appends one row to")
@@ -47,12 +51,13 @@ def set_seed(seed):
 
 
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, amp=False):
     """Return accuracy, macro F1 and per-class F1 on one split."""
     model.eval()
     preds, labels = [], []
     for x, y in loader:
-        out = model(x.to(device))
+        with torch.amp.autocast("cuda", dtype=torch.float16, enabled=amp and device.type == "cuda"):
+            out = model(x.to(device))
         preds.append(out.argmax(dim=1).cpu())
         labels.append(y)
     preds, labels = torch.cat(preds).numpy(), torch.cat(labels).numpy()
@@ -72,7 +77,10 @@ def main():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device(args.device)
-    print(f"Device: {device} | threads: {args.threads} | batch size: {args.batch_size}")
+    if args.amp and device.type != "cuda":
+        raise ValueError("--amp requires --device cuda or a CUDA device selected by --device auto")
+    precision = "amp_fp16" if args.amp else "fp32"
+    print(f"Device: {device} | threads: {args.threads} | batch size: {args.batch_size} | precision: {precision}")
 
     # --- Data (Dana's pipeline) ---
     t0 = time.perf_counter()
@@ -91,6 +99,7 @@ def main():
     model = SleepCNN().to(device)
     loss_fn = nn.CrossEntropyLoss(weight=train_ds.class_weights().to(device))  # rare stages count more
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
 
     # --- Training ---
     Path(args.results).parent.mkdir(parents=True, exist_ok=True)
@@ -103,16 +112,18 @@ def main():
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            loss = loss_fn(model(x), y)
-            loss.backward()
-            optimizer.step()
+            with torch.amp.autocast("cuda", dtype=torch.float16, enabled=args.amp and device.type == "cuda"):
+                loss = loss_fn(model(x), y)
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             total_loss += loss.item() * len(y)
         if device.type == "cuda":
             torch.cuda.synchronize()  # make sure the GPU has finished before stopping the clock
         epoch_time = time.perf_counter() - t0
         epoch_times.append(epoch_time)
 
-        val = evaluate(model, val_loader, device)
+        val = evaluate(model, val_loader, device, amp=args.amp)
         print(f"Epoch {epoch:2d} | loss {total_loss / len(train_ds):.3f} | "
               f"val acc {val['accuracy']:.3f} | val macro F1 {val['macro_f1']:.3f} | "
               f"{epoch_time:.1f} s ({len(train_ds) / epoch_time:.0f} samples/s)")
@@ -122,8 +133,8 @@ def main():
 
     # --- Final results on the best model ---
     model.load_state_dict(torch.load(best_path, map_location=device))
-    val = evaluate(model, val_loader, device)
-    test = evaluate(model, test_loader, device)
+    val = evaluate(model, val_loader, device, amp=args.amp)
+    test = evaluate(model, test_loader, device, amp=args.amp)
     print("\nBest model, test set:")
     print(f"  accuracy {test['accuracy']:.3f} | macro F1 {test['macro_f1']:.3f}")
     for name, f1 in zip(STAGE_NAMES, test["per_class_f1"]):
@@ -139,6 +150,7 @@ def main():
         "threads": args.threads,
         "batch_size": args.batch_size,
         "lr": args.lr,
+        "precision": precision,
         "epochs": args.epochs,
         "seed": args.seed,
         "data_load_s": round(load_time, 2),
