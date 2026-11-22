@@ -54,6 +54,13 @@ Sleep-EDF Expanded v1.0.0 from PhysioNet (`physionet.org/files/sleep-edfx/1.0.0/
 
 ## Resulting dataset
 
+The full data download produced 147 PSG recordings and 148 hypnogram files.
+Five PSG recordings had no matching hypnogram and were skipped during
+preprocessing. The benchmark jobs therefore used 142 paired recordings.
+The original 153-recording / 195,469-epoch totals below describe the complete
+download set; the benchmark splits below are the totals used in the current
+CPU, GPU and AMP runs.
+
 | Stage | Epochs | Share |
 |---|---|---|
 | Wake | 65,941 | 33.7% |
@@ -63,13 +70,19 @@ Sleep-EDF Expanded v1.0.0 from PhysioNet (`physionet.org/files/sleep-edfx/1.0.0/
 | REM | 25,835 | 13.2% |
 | **Total** | **195,469** | |
 
-| Split | Subjects | Recordings | Epochs | Share of data |
-|---|---|---|---|---|
-| Train | 54 | 105 | 133,319 | 68.2% |
-| Val | 12 | 24 | 34,286 | 17.5% |
-| Test | 12 | 24 | 27,864 | 14.3% |
+| Benchmark split | Recordings | Epochs | Share of benchmark data |
+|---|---:|---:|---:|
+| Train | 142 paired recordings | 127,220 | 70.7% |
+| Val | Subject-based split | 25,306 | 14.1% |
+| Test | Subject-based split | 27,413 | 15.2% |
+| **Total** | 142 | 179,939 | 100% |
 
-Class counts per split, with each class's share of that split:
+The 195,469-epoch and 133,319/34,286/27,864 tables above are the
+complete-set estimates for the full 153-recording dataset. The benchmark
+experiments used the 142 paired recordings available after removing five
+PSG recordings that had no matching hypnogram.
+
+Original complete-set class counts per split:
 
 | Stage | Train | Val | Test |
 |---|---|---|---|
@@ -89,6 +102,8 @@ The classes are imbalanced: N3 is the rarest (6.7%) and N1 the second rarest (11
 ## Timing
 
 Preprocessing all 153 recordings from EDF took 164.9 s as one Slurm job (single process). This is the "read from EDF" cost that the saved `.npz` files avoid, and the baseline for any parallel preprocessing (e.g. Dask).
+The 142 paired recordings used in the benchmark runs were preprocessed in
+126 s on `julia` with four CPU tasks.
 
 ## References
 
