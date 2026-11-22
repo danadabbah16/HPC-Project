@@ -16,7 +16,10 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 DATA_DIR=${DATA_DIR:-data/sample}
 EPOCHS=${EPOCHS:-3}
 RUN=${RUN:-test_slurm}
+BATCH=${BATCH:-64}
+LR=${LR:-0.001}
 
-echo "Job $SLURM_JOB_ID on $(hostname) with $SLURM_CPUS_PER_TASK CPU(s)"
+echo "Job $SLURM_JOB_ID on $(hostname) with $SLURM_CPUS_PER_TASK CPU(s), batch $BATCH, lr $LR"
 srun python -m src.train --data "$DATA_DIR" --epochs "$EPOCHS" \
+     --batch-size "$BATCH" --lr "$LR" \
      --threads "$SLURM_CPUS_PER_TASK" --run-name "$RUN"
