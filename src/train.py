@@ -23,7 +23,7 @@ from sklearn.metrics import accuracy_score, f1_score
 from torch import nn
 from torch.utils.data import DataLoader
 
-from src.data.dataset import STAGE_NAMES, SleepEDFDataset
+from src.data.dataset import STAGE_NAMES, SleepEDFDataset, load_split
 from src.models.cnn import SleepCNN
 
 
@@ -36,6 +36,8 @@ def parse_args():
     p.add_argument("--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 1)),
                    help="CPU threads for PyTorch (defaults to the cores Slurm gave you)")
     p.add_argument("--loader-workers", type=int, default=0, help="DataLoader worker processes")
+    p.add_argument("--data-format", default="npz", choices=["npz", "hdf5"],
+                   help="npz = Dana's per-recording files; hdf5 = Salome's single-file store")
     p.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     p.add_argument("--amp", action="store_true", help="use CUDA FP16 mixed precision")
     p.add_argument("--seed", type=int, default=42)
@@ -70,6 +72,8 @@ def append_result_csv(results_path, row):
 
     for existing_row in existing_rows:
         existing_row.setdefault("precision", "fp32")
+        existing_row.setdefault("loader_workers", "0")
+        existing_row.setdefault("data_format", "npz")
 
     with results_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -108,20 +112,24 @@ def main():
     if args.amp and device.type != "cuda":
         raise ValueError("--amp requires --device cuda or a CUDA device selected by --device auto")
     precision = "amp_fp16" if args.amp else "fp32"
-    print(f"Device: {device} | threads: {args.threads} | batch size: {args.batch_size} | precision: {precision}")
+    print(f"Device: {device} | threads: {args.threads} | batch size: {args.batch_size} | "
+          f"precision: {precision} | loader_workers: {args.loader_workers} | format: {args.data_format}")
 
-    # --- Data (Dana's pipeline) ---
+    # --- Data (Dana's .npz pipeline, or Salome's HDF5 store) ---
     t0 = time.perf_counter()
-    train_ds = SleepEDFDataset(args.data, "train")
-    val_ds = SleepEDFDataset(args.data, "val")
-    test_ds = SleepEDFDataset(args.data, "test")
+    train_ds = load_split(args.data, "train", fmt=args.data_format)
+    val_ds = load_split(args.data, "val", fmt=args.data_format)
+    test_ds = load_split(args.data, "test", fmt=args.data_format)
     load_time = time.perf_counter() - t0
     print(f"Loaded {len(train_ds)} train / {len(val_ds)} val / {len(test_ds)} test epochs in {load_time:.1f} s")
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
-                              num_workers=args.loader_workers)
-    val_loader = DataLoader(val_ds, batch_size=256, num_workers=args.loader_workers)
-    test_loader = DataLoader(test_ds, batch_size=256, num_workers=args.loader_workers)
+    loader_kw = dict(num_workers=args.loader_workers)
+    if args.loader_workers > 0:
+        loader_kw["persistent_workers"] = True
+        loader_kw["prefetch_factor"] = 2
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, **loader_kw)
+    val_loader = DataLoader(val_ds, batch_size=256, **loader_kw)
+    test_loader = DataLoader(test_ds, batch_size=256, **loader_kw)
 
     # --- Model, loss, optimiser ---
     model = SleepCNN().to(device)
@@ -176,6 +184,8 @@ def main():
         "nodes": 1,
         "workers": 1,
         "threads": args.threads,
+        "loader_workers": args.loader_workers,
+        "data_format": args.data_format,
         "batch_size": args.batch_size,
         "lr": args.lr,
         "precision": precision,
