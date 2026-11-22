@@ -12,6 +12,17 @@ srun -c 4 --mem=8G python -m src.data.preprocess --raw data/raw/sleep-cassette -
 python -m src.data.make_splits --data data/processed --seed 42 --sample data/sample
 ```
 
+On Slurm, use the cluster login node for the download, then submit the
+preprocessing/split job:
+
+```bash
+bash scripts/download_data.sh data/raw
+sbatch slurm/prepare_sleep_edf.sbatch
+squeue -u "$USER"
+tail -n 40 results/logs/prepare-sleep-edf-<JOB_ID>.out
+test -f data/processed/splits.json
+```
+
 Then, in Python:
 
 ```python
