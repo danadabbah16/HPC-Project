@@ -50,6 +50,34 @@ def set_seed(seed):
     torch.manual_seed(seed)
 
 
+def append_result_csv(results_path, row):
+    """Append a row while adding new columns to older shared CSV files."""
+    results_path = Path(results_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_fieldnames = []
+    existing_rows = []
+
+    if results_path.exists():
+        with results_path.open("r", newline="") as f:
+            reader = csv.DictReader(f)
+            existing_fieldnames = reader.fieldnames or []
+            existing_rows = list(reader)
+
+    fieldnames = list(existing_fieldnames)
+    for name in row:
+        if name not in fieldnames:
+            fieldnames.append(name)
+
+    for existing_row in existing_rows:
+        existing_row.setdefault("precision", "fp32")
+
+    with results_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(existing_rows)
+        writer.writerow(row)
+
+
 @torch.no_grad()
 def evaluate(model, loader, device, amp=False):
     """Return accuracy, macro F1 and per-class F1 on one split."""
@@ -163,12 +191,7 @@ def main():
         "test_macro_f1": round(test["macro_f1"], 4),
         **{f"test_f1_{n}": round(f, 4) for n, f in zip(STAGE_NAMES, test["per_class_f1"])},
     }
-    new_file = not Path(args.results).exists()
-    with open(args.results, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=row.keys())
-        if new_file:
-            writer.writeheader()
-        writer.writerow(row)
+    append_result_csv(args.results, row)
     print(f"\nSaved results to {args.results} and model to {best_path}")
 
 

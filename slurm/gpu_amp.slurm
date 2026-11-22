@@ -3,24 +3,28 @@
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=1
-#SBATCH --time=00:30:00
-#SBATCH --output=logs/%x-%j.out
-#SBATCH --error=logs/%x-%j.err
+#SBATCH --time=04:00:00
+#SBATCH --output=results/logs/%x_%j.out
+#SBATCH --error=results/logs/%x_%j.err
 
 module purge
 module load pytorch/2.8.0
 
-mkdir -p logs
+mkdir -p results/logs
+nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 
 srun apptainer exec --nv "$PYTORCH_GPU_SIF" bash -lc '
   cd "$SLURM_SUBMIT_DIR"
+  RUN=${RUN:-gpu_amp}
   python -m src.train \
-    --data data/sample \
-    --epochs 2 \
-    --batch-size 32 \
+    --data data/processed \
+    --epochs 10 \
+    --batch-size 64 \
+    --lr 0.001 \
+    --seed 42 \
     --threads 1 \
     --device cuda \
     --amp \
-    --run-name gabriel_sample_amp \
+    --run-name "$RUN" \
     --results results/results.csv
 '
