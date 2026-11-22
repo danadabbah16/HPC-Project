@@ -1,0 +1,7 @@
+# Extra packages for Salome (Performance Lead). Install on top of requirements-cpu.txt:
+#   pip install -r env/requirements-cpu.txt
+#   pip install -r env/requirements-perf.txt
+h5py==3.14.0
+dask[distributed]==2025.11.0
+pandas==2.3.3
+tensorboard==2.20.0
