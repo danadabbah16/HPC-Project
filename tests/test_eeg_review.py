@@ -1,6 +1,6 @@
 """Unit tests for src/eeg_review.py on small synthetic data."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 import mne
 import numpy as np
@@ -17,10 +17,20 @@ from src.eeg_review import (
     find_shared_subjects,
     get_subject_id,
     has_alignment_problem,
+    read_edf_start,
     summarise_ages_per_split,
 )
 
-RECORDING_START = datetime(1989, 4, 24, 16, 13, tzinfo=UTC)
+RECORDING_START = datetime(1989, 4, 24, 16, 13)
+EDF_HEADER_LENGTH = 256
+
+
+def write_fake_edf_header(edf_path, start_text: str) -> None:
+    """Write a blank 256-byte EDF header with the given start date and time."""
+    header = bytearray(b" " * EDF_HEADER_LENGTH)
+    header[168:184] = start_text.encode("ascii")
+    with open(edf_path, "wb") as edf_file:
+        edf_file.write(header)
 
 
 def test_stage_map_merges_s3_and_s4_into_n3():
@@ -68,14 +78,23 @@ def test_count_off_grid_times_finds_shifted_labels():
     assert count_off_grid_times(np.array([0.0, 45.0, 30.5])) == 2
 
 
-def test_compute_start_offset_s():
-    hypnogram_start = datetime(1989, 4, 24, 16, 13, 10, tzinfo=UTC)
-    assert compute_start_offset_s(RECORDING_START, hypnogram_start) == 10.0
+def test_read_edf_start_reads_header(tmp_path):
+    # Same start as the real SC4001E0-PSG.edf header.
+    edf_path = tmp_path / "fake.edf"
+    write_fake_edf_header(edf_path, "24.04.8916.13.00")
+    assert read_edf_start(edf_path) == RECORDING_START
 
 
-def test_compute_start_offset_s_rejects_missing_time():
+def test_read_edf_start_rejects_broken_header(tmp_path):
+    edf_path = tmp_path / "broken.edf"
+    write_fake_edf_header(edf_path, "not a date here")
     with pytest.raises(ValueError):
-        compute_start_offset_s(None, RECORDING_START)
+        read_edf_start(edf_path)
+
+
+def test_compute_start_offset_s():
+    hypnogram_start = datetime(1989, 4, 24, 16, 13, 10)
+    assert compute_start_offset_s(RECORDING_START, hypnogram_start) == 10.0
 
 
 def test_check_label_alignment_ignores_non_stage_labels():
@@ -83,9 +102,8 @@ def test_check_label_alignment_ignores_non_stage_labels():
         onset=[0.0, 60.0, 75.0],
         duration=[60.0, 30.0, 10.0],
         description=["Sleep stage W", "Sleep stage 1", "Movement time"],
-        orig_time=RECORDING_START,
     )
-    alignment = check_label_alignment(RECORDING_START, annotations)
+    alignment = check_label_alignment(RECORDING_START, RECORDING_START, annotations)
     assert alignment == {
         "start_offset_s": 0.0,
         "off_grid_onsets": 0,
@@ -99,11 +117,20 @@ def test_check_label_alignment_finds_shifted_stage_label():
         onset=[0.0, 45.0],
         duration=[45.0, 30.0],
         description=["Sleep stage W", "Sleep stage 2"],
-        orig_time=RECORDING_START,
     )
-    alignment = check_label_alignment(RECORDING_START, annotations)
+    alignment = check_label_alignment(RECORDING_START, RECORDING_START, annotations)
     assert alignment["off_grid_onsets"] == 1
     assert alignment["off_grid_durations"] == 1
+    assert has_alignment_problem(alignment)
+
+
+def test_check_label_alignment_finds_late_hypnogram():
+    annotations = mne.Annotations(
+        onset=[0.0], duration=[30.0], description=["Sleep stage W"]
+    )
+    hypnogram_start = datetime(1989, 4, 24, 16, 13, 30)
+    alignment = check_label_alignment(RECORDING_START, hypnogram_start, annotations)
+    assert alignment["start_offset_s"] == 30.0
     assert has_alignment_problem(alignment)
 
 

@@ -22,6 +22,10 @@ GRID_TOLERANCE_S = 0.01
 SLEEP_CASSETTE_PREFIX = "SC4"
 SUBJECT_ID_LENGTH = 2
 SHARE_DECIMALS = 4
+# EDF headers store the start as "dd.mm.yyhh.mm.ss" in bytes 168 to 183.
+EDF_START_BYTE = 168
+EDF_START_END_BYTE = 184
+EDF_START_FORMAT = "%d.%m.%y%H.%M.%S"
 
 
 def get_subject_id(recording_name: str) -> str:
@@ -56,14 +60,22 @@ def write_csv(output_path: Path, header: list[str], rows: list[list]) -> None:
     print(f"Wrote {output_path}")
 
 
-def read_psg_start(psg_path: Path) -> datetime | None:
-    """Return the recording start time from a PSG file header."""
+def read_edf_start(edf_path: Path) -> datetime:
+    """Return the start date and time written in an EDF file header."""
+    # MNE drops the start time when reading hypnogram files, so read the header bytes.
     try:
-        # preload=False reads only the header, not the signals.
-        raw = mne.io.read_raw_edf(psg_path, preload=False, verbose="ERROR")
-    except Exception as error:
-        raise RuntimeError(f"Could not read PSG header {psg_path}: {error}") from error
-    return raw.info["meas_date"]
+        with open(edf_path, "rb") as edf_file:
+            header = edf_file.read(EDF_START_END_BYTE)
+    except OSError as error:
+        raise RuntimeError(f"Could not read EDF header {edf_path}: {error}") from error
+
+    start_text = header[EDF_START_BYTE:EDF_START_END_BYTE].decode("ascii", "replace")
+    try:
+        return datetime.strptime(start_text, EDF_START_FORMAT)
+    except ValueError as error:
+        raise ValueError(
+            f"Unreadable start time '{start_text}' in {edf_path}"
+        ) from error
 
 
 def read_hypnogram(hypnogram_path: Path) -> mne.Annotations:
@@ -76,12 +88,8 @@ def read_hypnogram(hypnogram_path: Path) -> mne.Annotations:
         ) from error
 
 
-def compute_start_offset_s(
-    psg_start: datetime | None, hypnogram_start: datetime | None
-) -> float:
+def compute_start_offset_s(psg_start: datetime, hypnogram_start: datetime) -> float:
     """Return how many seconds the hypnogram starts after the PSG."""
-    if psg_start is None or hypnogram_start is None:
-        raise ValueError("Start time missing in the PSG or hypnogram header")
     offset = hypnogram_start - psg_start
     return offset.total_seconds()
 
@@ -94,7 +102,7 @@ def count_off_grid_times(times_s: np.ndarray) -> int:
 
 
 def check_label_alignment(
-    psg_start: datetime | None, annotations: mne.Annotations
+    psg_start: datetime, hypnogram_start: datetime, annotations: mne.Annotations
 ) -> dict:
     """Return the start offset and the number of off-grid stage labels for one night."""
     # Only stage labels become training labels, so only they must sit on the 30 s grid.
@@ -106,7 +114,7 @@ def check_label_alignment(
             stage_durations_s.append(annotation["duration"])
 
     return {
-        "start_offset_s": compute_start_offset_s(psg_start, annotations.orig_time),
+        "start_offset_s": compute_start_offset_s(psg_start, hypnogram_start),
         "off_grid_onsets": count_off_grid_times(np.array(stage_onsets_s)),
         "off_grid_durations": count_off_grid_times(np.array(stage_durations_s)),
     }
@@ -256,7 +264,9 @@ def run_alignment_checks(raw_dir: Path, out_dir: Path) -> None:
     total_label_epochs = {}
     for recording_name, psg_path, hypnogram_path in recording_pairs:
         annotations = read_hypnogram(hypnogram_path)
-        alignment = check_label_alignment(read_psg_start(psg_path), annotations)
+        psg_start = read_edf_start(psg_path)
+        hypnogram_start = read_edf_start(hypnogram_path)
+        alignment = check_label_alignment(psg_start, hypnogram_start, annotations)
         alignment_rows.append(
             [
                 recording_name,
