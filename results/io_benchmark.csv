@@ -1,0 +1,4 @@
+date,epochs_per_s,n_epochs,n_recordings,path,processed,seconds,speedup_vs_edf_projected
+2026-11-23T01:51:11,2826.3,8154,8,edf_reparse,data/processed,2.885,
+2026-11-23T01:51:11,18504.5,133319,105,npz_dir,data/processed,7.205,6.5
+2026-11-23T01:51:11,13678.1,133319,105,hdf5,data/processed,9.747,4.8
