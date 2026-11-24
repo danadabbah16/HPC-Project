@@ -1,0 +1,4 @@
+split,n_subjects,mean_age,median_age,min_age,max_age
+train,54,59.3,66.0,25,96
+val,12,54.0,54.0,30,97
+test,12,61.2,58.0,28,101
