@@ -1,0 +1,23 @@
+Job 34586 on julia with 1 CPU(s), batch 512, lr 0.001
+Device: cpu | threads: 1 | batch size: 512
+Loaded 133319 train / 34286 val / 27864 test epochs in 10.2 s
+Epoch  1 | loss 0.871 | val acc 0.735 | val macro F1 0.671 | 61.0 s (2186 samples/s)
+Epoch  2 | loss 0.719 | val acc 0.721 | val macro F1 0.675 | 63.7 s (2093 samples/s)
+Epoch  3 | loss 0.694 | val acc 0.725 | val macro F1 0.667 | 63.4 s (2102 samples/s)
+Epoch  4 | loss 0.676 | val acc 0.749 | val macro F1 0.697 | 63.4 s (2103 samples/s)
+Epoch  5 | loss 0.666 | val acc 0.740 | val macro F1 0.705 | 66.4 s (2007 samples/s)
+Epoch  6 | loss 0.659 | val acc 0.721 | val macro F1 0.682 | 55.0 s (2425 samples/s)
+Epoch  7 | loss 0.653 | val acc 0.746 | val macro F1 0.697 | 62.1 s (2148 samples/s)
+Epoch  8 | loss 0.650 | val acc 0.747 | val macro F1 0.701 | 61.5 s (2167 samples/s)
+Epoch  9 | loss 0.645 | val acc 0.755 | val macro F1 0.708 | 59.6 s (2239 samples/s)
+Epoch 10 | loss 0.641 | val acc 0.762 | val macro F1 0.718 | 57.7 s (2312 samples/s)
+
+Best model, test set:
+  accuracy 0.721 | macro F1 0.690
+    W: F1 0.898
+   N1: F1 0.430
+   N2: F1 0.730
+   N3: F1 0.721
+  REM: F1 0.673
+
+Saved results to results/results.csv and model to results/model_bs512_lr_fixed.pt
