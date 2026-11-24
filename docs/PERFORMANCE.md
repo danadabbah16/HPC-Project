@@ -21,79 +21,62 @@ accuracy / macro F1 against Nini’s `baseline_1cpu` row in `results/results.csv
 
 ## 1. Bottleneck analysis (PyTorch Profiler)
 
-```bash
-# Local smoke test
-python -m src.profile_train --data data/sample --loader-workers 0
+Ran on the SciTech cluster (`slurm/profile.sbatch`), 1 CPU thread, `loader_workers=0`,
+full processed data. Artifacts: `results/profiler/summary_20261123_014917.txt` (+ trace/ops).
 
-# Cluster, same 1-CPU setup as the baseline
-sbatch slurm/profile.sbatch
-# With DataLoader workers:
-WORKERS=4 sbatch --cpus-per-task=5 slurm/profile.sbatch
-```
-
-Outputs land in `results/profiler/`:
-
-- `trace_*.json` — open in [Perfetto](https://ui.perfetto.dev) or `chrome://tracing`
-- `summary_*.txt` — top ops table
-- `ops_*.csv` — machine-readable top ops for the report
-
-**Expected finding (hypothesis):** with `loader_workers=0` and data already in RAM
-(after Dana’s `.npz` load), the hot path is CPU convolution / GEMM, not disk I/O.
-The expensive disk work is the *one-time* EDF parse (~165 s sequential, see `docs/DATA.md`).
-If someone re-ran preprocess every training job, that would dominate — which is why
-the main optimization is “save once, reload fast”.
-
-Fill in after the job:
+**Finding:** once Dana’s `.npz` data is already in memory, training time is mostly
+**compute**, not disk or the DataLoader. Top self-CPU time:
 
 | Setting | Top op | Share of self CPU | Notes |
 |---|---|---|---|
-| 1 CPU, workers=0 | _TBD_ | _TBD_ | |
-| 1 CPU, workers=4 | _TBD_ | _TBD_ | |
+| 1 CPU, workers=0 | `Optimizer.step#Adam.step` | **54.4%** | Loss (`aten::cross_entropy_loss`) **35.0%**; convolutions a few %; DataLoader **&lt;1%** |
+| 1 CPU, workers=4 | not re-profiled | — | Loader sweep (below) already showed workers do not help with 1 train thread |
+
+So the expensive I/O is the **one-time** EDF parse (~165 s sequential). Re-doing that every
+training job would dominate; saving once is the main I/O win. During training itself, the
+Adam step and loss dominate.
 
 ## 2. Main optimization: preprocess once → fast format
 
-| Path | What it does | Script |
-|---|---|---|
-| EDF every time | MNE read + filter + epoch (slow) | `src.data.preprocess` |
-| `.npz` per night (Dana) | Already the project default | `data/processed/*.npz` |
-| Single HDF5 (Salome) | One sequential read per split | `python -m src.data.to_hdf5` |
+Measured with `slurm/io_benchmark.sbatch` → `results/io_benchmark.csv` (23 Nov 2026).
 
-```bash
-sbatch slurm/io_benchmark.sbatch
-# or locally on sample (skips EDF):
-python -m src.data.to_hdf5 --data data/sample
-python -m src.benchmark_io --processed data/sample --skip-edf
-```
+| Path | What | Train-split load (or projected) | Speedup vs projected EDF |
+|---|---|---|---|
+| Re-parse EDF | MNE read + filter + epoch | projected from 8 nights | 1× (baseline) |
+| `.npz` per night (Dana) | default store | **7.2 s** for 133,319 epochs | **6.5×** |
+| Single HDF5 (Salome) | `sleep_edf.h5` | **9.7 s** for same split | **4.8×** |
 
-Report the speedup of `.npz` / HDF5 vs projected full-train EDF cost from
-`results/io_benchmark.csv`. Training accuracy must stay within noise of `baseline_1cpu`
-(same seed 42, same epochs / batch / lr).
+**Keep `.npz` as the default.** HDF5 works and is still much faster than EDF, but was
+slightly slower than the `.npz` directory load in this run.
+
+Training accuracy with the saved formats stays in line with `baseline_1cpu`
+(test acc **0.719**, macro F1 **0.684**, seed 42).
 
 ## 3. Technology exploration: Dask (+ HDF5)
 
-| Technology | Role in this project | Why we tried it |
+| Technology | Role | Measured result |
 |---|---|---|
-| **Dask.distributed** | Parallelise Dana’s per-recording preprocess | Embarrassingly parallel over 153 nights; compare to 164.9 s sequential |
-| **HDF5 (h5py)** | Optional single-file training store | Fewer filesystem ops than 100+ `.npz` opens |
-| PyTorch Profiler | Bottleneck diagnosis | Required for the report |
-| DataLoader `num_workers` | Overlap host prep with compute | Sensitivity experiment below |
-
-```bash
-sbatch slurm/preprocess_dask.sbatch          # default 4 workers
-N_WORKERS=8 sbatch --cpus-per-task=8 slurm/preprocess_dask.sbatch
-```
-
-Record `preprocess_seconds` from `data/processed_dask/meta.json` vs Dana’s 164.9 s.
+| **Dask.distributed** | Parallel preprocess (4 workers) | **63.3 s** (`data/processed_dask/meta.json`) vs Dana’s sequential **164.9 s** → about **2.6×** wall-clock |
+| **HDF5 (h5py)** | Single-file store | 4.8× vs projected EDF (see above); optional |
+| PyTorch Profiler | Bottleneck diagnosis | Adam ~54%, loss ~35%, DataLoader &lt;1% |
+| DataLoader `num_workers` | Prefetch | No clear throughput win with 1 train thread (section 4) |
 
 ## 4. DataLoader worker sensitivity
 
-```bash
-bash slurm/loader_workers.sh
-# submits loader_w0 .. loader_w8, each appending to results/results.csv
-```
+Ran `bash slurm/loader_workers.sh` with train **threads = 1**, batch 64, lr 1e-3, epochs 10,
+seed 42. Rows in `results/results.csv`:
 
-Keep `THREADS=1` for the training loop so this is not confused with Gabriel’s
-CPU-thread scaling. Plot with:
+| Run | loader_workers | throughput (samples/s) | test acc | test macro F1 |
+|---|---|---|---|---|
+| baseline_1cpu | 0 | 2690.9 | 0.719 | 0.684 |
+| loader_w0 | 0 | **3057.0** | 0.719 | 0.684 |
+| loader_w1 | 1 | 2673.5 | 0.711 | 0.675 |
+| loader_w2 | 2 | 2643.7 | 0.711 | 0.675 |
+| loader_w4 | 4 | 2554.8 | 0.711 | 0.675 |
+| loader_w8 | 8 | 2863.4 | 0.711 | 0.675 |
+
+**Conclusion:** with one training thread, extra DataLoader workers do **not** clearly speed
+things up (and can add process overhead). Accuracy stays close to the baseline.
 
 ```bash
 python scripts/plot_salome.py
@@ -103,11 +86,11 @@ python scripts/plot_salome.py
 
 | Technology | Used for | Parallelism | Where it runs | Metric improved | Accuracy impact | Kept? |
 |---|---|---|---|---|---|---|
-| Compressed `.npz` (Dana) | Persist epochs once | I/O reduction | Shared FS | data_load_s, preprocess avoided | None (same tensors) | **Yes (default)** |
-| HDF5 pack | Single-file reload | I/O reduction | Shared FS | data_load_s | None if bit-identical load | Optional |
-| Dask.distributed | Parallel preprocess | Multi-process | CPU node | preprocess wall time | None (same algorithm) | Yes for prep jobs |
-| DataLoader workers | Prefetch batches | Multi-process | Train job | throughput / epoch time | Should be ~unchanged (seed 42) | Tune after plot |
-| PyTorch Profiler | Diagnosis only | — | Train job | — | — | Yes (methodology) |
+| Compressed `.npz` (Dana) | Persist epochs once | I/O reduction | Shared FS | **6.5×** vs re-reading EDF | None (same tensors) | **Yes (default)** |
+| HDF5 pack | Single-file reload | I/O reduction | Shared FS | **4.8×** vs EDF | None | Optional (npz faster here) |
+| Dask.distributed | Parallel preprocess | Multi-process | CPU node | **63.3 s** vs 164.9 s | None (same algorithm) | **Yes for prep jobs** |
+| DataLoader workers | Prefetch batches | Multi-process | Train job | no clear gain @ 1 train thread | ~unchanged | **No** (keep 0 with 1 thread) |
+| PyTorch Profiler | Diagnosis only | — | Train job | — | — | **Yes** (methodology) |
 | CUDA / AMP | Train compute | GPU | Gabriel | throughput | Check vs baseline | Gabriel’s section |
 | PyTorch DDP | Multi-worker train | Multi-process / multi-node | Nikita | throughput, efficiency | Check vs baseline | Nikita’s section |
 
@@ -116,16 +99,17 @@ python scripts/plot_salome.py
 | Item | Value |
 |---|---|
 | Random seed | `42` (same as Dana’s split and Nini’s baseline) |
-| Batch size / lr / epochs | `64` / `1e-3` / `10` unless noted |
+| Batch size / lr / epochs | `64` / `1e-3` / `10` |
 | Train threads for loader study | `1` |
-| Packages | `env/requirements-cpu.txt` + `env/requirements-perf.txt` |
-| Results schema | append-only `results/results.csv` (+ `results/io_benchmark.csv`) |
-| Cluster modules (fill on site) | e.g. `pytorch/2.8.0` — copy from Gabriel’s methodology |
+| Packages | `env/requirements-cpu.txt` + `env/requirements-perf.txt` (venv on cluster) |
+| Results schema | `results/results.csv`, `results/io_benchmark.csv`, `results/profiler/` |
+| Cluster | SciTech IE HPC; prep/profile/loader jobs on CPU partition (e.g. node `fortran`) |
+| Key artifacts | profiler `summary_20261123_014917.txt`; Dask `preprocess_seconds: 63.3` |
 
 ## 7. Report subsection checklist
 
-- [ ] Bottleneck: paste top profiler ops + 1–2 sentences on what dominates
-- [ ] Optimization: table of EDF vs `.npz` vs HDF5 times and speedup
-- [ ] Technology exploration: Dask speedup + technology matrix table above
-- [ ] Loader-worker plot + note that test macro F1 stays near baseline
+- [x] Bottleneck: Adam ~54%, loss ~35%, DataLoader &lt;1% once data is in RAM
+- [x] Optimization: EDF vs `.npz` (6.5×) vs HDF5 (4.8×)
+- [x] Technology exploration: Dask 63.3 s vs 164.9 s; matrix filled
+- [ ] Loader-worker plot (`python scripts/plot_salome.py`) + commit figures
 - [ ] Help write Conclusions (what to keep for EuroHPC scale-up)
